@@ -1,0 +1,98 @@
+#!/bin/bash
+
+stylus=$(xsetwacom --list devices | grep STYLUS | cut -f1 | head -1 | sed 's/ *$//')
+dots_wide=14
+dots_high=9
+aspect=$(bc -l <<<"16/9")
+x_r=0.5
+y_r=0.55
+desired_dot_width=0
+desired_dot_height=0
+
+while getopts s:r:u:v:x:y:w:h: opt; do
+	case "$opt" in
+	s)
+		stylus="$2"
+		shift 2
+		;;
+	r)
+		aspect=$(bc -l <<<"$2")
+		shift 2
+		;;
+	u)
+		dots_wide=$2
+		shift 2
+		;;
+	v)
+		dots_high=$2
+		shift 2
+		;;
+	x)
+		x_r=$2
+		shift 2
+		;;
+	y)
+		x_y=$2
+		shift 2
+		;;
+	w)
+		desired_dot_width=$2
+		shift 2
+		;;
+	h)
+		desired_dot_height=$2
+		shift 2
+		;;
+	\?)
+		echo "Invalid option: -$OPTARG" >&2
+		exit 1
+		;;
+	esac
+done
+
+if [[ $(bc -l <<<"scale=0; ${desired_dot_width} / 1") -le 0 ]] &&
+	[[ $(bc -l <<<"scale=0; ${desired_dot_height} / 1") -le 0 ]]; then
+	echo "Either -w or -h must be provided" >&2
+	exit 1
+fi
+
+read prev_x prev_y prev_x_end prev_y_end < <(xsetwacom get "$stylus" Area) || {
+	echo "Could not read tablet area" >&2
+	exit 1
+}
+xsetwacom set "$stylus" ResetArea || {
+	echo "Could not reset tablet area" >&2
+	exit 1
+}
+read _ _ area_width area_height < <(xsetwacom get "$stylus" Area) || {
+	echo "Could not read tablet area" >&2
+	exit 1
+}
+xsetwacom set "$stylus" Area $prev_x $prev_y $prev_x_end $prev_y_end
+
+dot_x_ratio="$(bc -l <<<"${area_width} / ${dots_wide}")"
+dot_y_ratio="$(bc -l <<<"${area_height} / ${dots_high}")"
+
+if [[ $(bc -l <<<"scale=0; ${desired_dot_width} / 1") -gt 0 ]]; then
+	desired_width="$(bc -l <<<"${desired_dot_width} * ${dot_x_ratio}")"
+	desired_height="$(bc -l <<<"scale=0; ${desired_width} / ${aspect}")"
+	desired_width="$(bc -l <<<"scale=0; ${desired_width} / 1")"
+else
+	desired_height="$(bc -l <<<"${desired_dot_height} * ${dot_y_ratio}")"
+	desired_width="$(bc -l <<<"scale=0; ${desired_height} * ${aspect}")"
+	desired_height="$(bc -l <<<"scale=0; ${desired_height} / 1")"
+fi
+
+start_x="$(bc -l <<<"scale=0; (${x_r} * ${area_width} - ${desired_width} / 2) / 1")"
+start_y="$(bc -l <<<"scale=0; (${y_r} * ${area_height} - ${desired_height} / 2) / 1")"
+end_x=$((start_x + desired_width))
+end_y=$((start_y + desired_height))
+
+echo "Setting area to $start_x $start_y $end_x $end_y"
+read -r -p "Ok? (y/N) " ok
+if ! [[ $ok =~ y|Y ]]; then
+	echo "Cancelled"
+	exit 1
+fi
+
+xsetwacom set "$stylus" Area $start_x $start_y $end_x $end_y
